@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#111111" />
+  <title>Kimim Ben? (Play)</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <style>
+    body { margin:0; font-family:-apple-system, system-ui, Segoe UI, Roboto, Arial; background:#0b0b0b; color:#fff; }
+    .wrap { max-width: 700px; margin:0 auto; padding: 14px; display:flex; flex-direction:column; min-height:100vh; gap:12px; }
+    .top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .title { font-size:18px; font-weight:700; }
+    .btnSmall { padding:10px 12px; border-radius:12px; border:0; background:#1f1f1f; color:#fff; font-weight:600; }
+    .card { flex:1; display:flex; align-items:center; justify-content:center; background:#121212; border-radius:18px; overflow:hidden; }
+    img { width:100%; height:100%; object-fit:contain; background:#000; }
+    .bottom { display:flex; gap:10px; }
+    .btn {
+      flex:1; padding:16px; border-radius:16px; border:0;
+      background:#1f1f1f; color:#fff; font-size:18px; font-weight:700;
+    }
+    .btn:active { transform: scale(0.99); }
+    .sub { color:#bdbdbd; font-size:13px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <button class="btnSmall" id="backBtn">← Ana Ekran</button>
+      <div>
+        <div class="title">Oyun</div>
+        <div class="sub" id="counter"></div>
+      </div>
+      <button class="btnSmall" id="reshuffleBtn">Karıştır</button>
+    </div>
+
+    <div class="card">
+      <img id="img" alt="Kart" />
+    </div>
+
+    <div class="bottom">
+      <button class="btn" id="nextBtn">Sıradaki</button>
+    </div>
+  </div>
+
+<script>
+/* ---------- PWA service worker ---------- */
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(()=>{});
+}
+
+/* ---------- IndexedDB read ---------- */
+const DB_NAME = 'whoami_deck_db';
+const STORE = 'photos';
+let db;
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onsuccess = () => { db = req.result; resolve(db); };
+    req.onerror = () => reject(req.error);
+  });
+}
+function tx() { return db.transaction(STORE, 'readonly').objectStore(STORE); }
+function getPhoto(id) {
+  return new Promise((resolve, reject) => {
+    const req = tx().get(id);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+function getAllIds() {
+  return new Promise((resolve, reject) => {
+    const req = tx().getAllKeys();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+const img = document.getElementById('img');
+const counter = document.getElementById('counter');
+const nextBtn = document.getElementById('nextBtn');
+const backBtn = document.getElementById('backBtn');
+const reshuffleBtn = document.getElementById('reshuffleBtn');
+
+let order = [];
+let idx = 0;
+let currentUrl = null;
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+function saveSession() {
+  sessionStorage.setItem('play_order', JSON.stringify(order));
+  sessionStorage.setItem('play_index', String(idx));
+}
+
+async function loadSessionOrInit() {
+  const rawOrder = sessionStorage.getItem('play_order');
+  const rawIdx = sessionStorage.getItem('play_index');
+
+  if (rawOrder) {
+    try { order = JSON.parse(rawOrder) || []; } catch { order = []; }
+  }
+  if (rawIdx) idx = parseInt(rawIdx, 10) || 0;
+
+  if (!order.length) {
+    order = await getAllIds();
+    shuffle(order);
+    idx = 0;
+    saveSession();
+  }
+}
+
+async function showCurrent() {
+  if (!order.length) {
+    alert('Deck boş. Ana ekrana dönüp foto ekle.');
+    location.href = './index.html';
+    return;
+  }
+  if (idx >= order.length) idx = 0;
+
+  const id = order[idx];
+  const item = await getPhoto(id);
+  if (!item) {
+    // if missing, rebuild order
+    order = await getAllIds();
+    shuffle(order);
+    idx = 0;
+    saveSession();
+    return showCurrent();
+  }
+
+  if (currentUrl) URL.revokeObjectURL(currentUrl);
+  currentUrl = URL.createObjectURL(item.blob);
+  img.src = currentUrl;
+
+  counter.textContent = `${idx + 1} / ${order.length}`;
+}
+
+nextBtn.addEventListener('click', async () => {
+  idx += 1;
+  if (idx >= order.length) idx = 0;
+  saveSession();
+  await showCurrent();
+});
+
+backBtn.addEventListener('click', () => {
+  location.href = './index.html';
+});
+
+reshuffleBtn.addEventListener('click', async () => {
+  order = await getAllIds();
+  shuffle(order);
+  idx = 0;
+  saveSession();
+  await showCurrent();
+});
+
+(async () => {
+  await openDB();
+  await loadSessionOrInit();
+  await showCurrent();
+})();
+</script>
+</body>
+</html>
