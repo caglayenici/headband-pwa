@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#111111" />
+  <title>Kimim Ben? (Deck)</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <style>
+    body { margin: 0; font-family: -apple-system, system-ui, Segoe UI, Roboto, Arial; background:#0b0b0b; color:#fff; }
+    .wrap { max-width: 520px; margin: 0 auto; padding: 18px; }
+    .title { font-size: 26px; font-weight: 700; margin: 10px 0 18px; }
+    .btn {
+      width: 100%; padding: 14px 16px; border-radius: 14px; border: 0;
+      background: #1f1f1f; color: #fff; font-size: 18px; font-weight: 600;
+      margin: 10px 0; cursor: pointer;
+    }
+    .btn:active { transform: scale(0.99); }
+    .sub { color:#bdbdbd; margin-top: 6px; font-size: 14px; }
+    .row { display:flex; gap:10px; }
+    .row .btn { flex:1; }
+    .deck { margin-top: 18px; }
+    .grid { display:grid; grid-template-columns: repeat(3, 1fr); gap:10px; }
+    .thumb {
+      width:100%; aspect-ratio: 1/1; object-fit: cover; border-radius: 12px; background:#141414;
+    }
+    .danger { background:#2a1515; }
+    .small { font-size:14px; opacity:.9; }
+    a { color:#9ad; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title">Kimim Ben?</div>
+
+    <div class="row">
+      <button class="btn" id="deckBtn">Deck (Fotoğraf Ekle)</button>
+      <button class="btn" id="playBtn">Play</button>
+    </div>
+
+    <div class="sub" id="countText">Deck: 0 foto</div>
+
+    <div class="deck">
+      <div class="sub" style="margin:12px 0 10px;">Deck Önizleme</div>
+      <div class="grid" id="grid"></div>
+
+      <button class="btn danger" id="clearBtn" style="margin-top:14px;">Deck’i Temizle</button>
+      <div class="sub small">Not: Fotoğraflar telefonda saklanır (tarayıcı hafızasında).</div>
+    </div>
+
+    <input id="fileInput" type="file" accept="image/*" multiple hidden />
+  </div>
+
+<script>
+/* ---------- PWA service worker ---------- */
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(()=>{});
+}
+
+/* ---------- Simple IndexedDB wrapper ---------- */
+const DB_NAME = 'whoami_deck_db';
+const STORE = 'photos';
+let db;
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const d = req.result;
+      if (!d.objectStoreNames.contains(STORE)) {
+        d.createObjectStore(STORE, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => { db = req.result; resolve(db); };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function tx(mode) {
+  return db.transaction(STORE, mode).objectStore(STORE);
+}
+
+function addPhoto(blob) {
+  return new Promise((resolve, reject) => {
+    const id = crypto.randomUUID();
+    const item = { id, blob, createdAt: Date.now() };
+    const req = tx('readwrite').add(item);
+    req.onsuccess = () => resolve(id);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function getAllPhotos() {
+  return new Promise((resolve, reject) => {
+    const req = tx('readonly').getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function clearPhotos() {
+  return new Promise((resolve, reject) => {
+    const req = tx('readwrite').clear();
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/* ---------- UI logic ---------- */
+const fileInput = document.getElementById('fileInput');
+const deckBtn = document.getElementById('deckBtn');
+const playBtn = document.getElementById('playBtn');
+const clearBtn = document.getElementById('clearBtn');
+const grid = document.getElementById('grid');
+const countText = document.getElementById('countText');
+
+deckBtn.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files || []);
+  if (!files.length) return;
+
+  for (const f of files) {
+    // as Blob
+    await addPhoto(f);
+  }
+  fileInput.value = '';
+  await renderDeck();
+});
+
+playBtn.addEventListener('click', async () => {
+  const all = await getAllPhotos();
+  if (!all.length) {
+    alert('Deck boş. Önce fotoğraf ekle.');
+    return;
+  }
+  // Store current order (shuffled ids) in sessionStorage
+  const ids = all.map(x => x.id);
+  shuffle(ids);
+  sessionStorage.setItem('play_order', JSON.stringify(ids));
+  sessionStorage.setItem('play_index', '0');
+  location.href = './play.html';
+});
+
+clearBtn.addEventListener('click', async () => {
+  const ok = confirm('Deck tamamen silinsin mi?');
+  if (!ok) return;
+  await clearPhotos();
+  await renderDeck();
+});
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+async function renderDeck() {
+  const all = await getAllPhotos();
+  countText.textContent = `Deck: ${all.length} foto`;
+
+  grid.innerHTML = '';
+  // show last 9 for preview
+  const recent = all.sort((a,b)=>b.createdAt-a.createdAt).slice(0, 9);
+
+  for (const item of recent) {
+    const url = URL.createObjectURL(item.blob);
+    const img = document.createElement('img');
+    img.className = 'thumb';
+    img.src = url;
+    img.onload = () => URL.revokeObjectURL(url);
+    grid.appendChild(img);
+  }
+}
+
+(async () => {
+  await openDB();
+  await renderDeck();
+})();
+</script>
+</body>
+</html>
